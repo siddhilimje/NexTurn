@@ -70,6 +70,20 @@ function initDb() {
       FOREIGN KEY (mentorId) REFERENCES users(id)
     );
   `);
+
+  // Migrate tables to have the file upload columns if they don't exist
+  try {
+    db.exec(`ALTER TABLE applications ADD COLUMN resumeUrl TEXT;`);
+  } catch (e) {
+    // Column might already exist
+  }
+  
+  try {
+    db.exec(`ALTER TABLE student_tasks ADD COLUMN fileUrl TEXT;`);
+  } catch (e) {
+    // Column might already exist
+  }
+
 }
 
 initDb();

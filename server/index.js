@@ -3,13 +3,34 @@ import cors from 'cors';
 import db from './db.js';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import multer from 'multer';
+import path from 'path';
+import fs from 'fs';
 
 const app = express();
 const PORT = 5000;
 const JWT_SECRET = 'nexturn_secret_key_dev'; // In production, use environment variable
 
+// Setup uploads directory
+const uploadDir = path.join(process.cwd(), 'uploads');
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir);
+}
+
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    cb(null, uploadDir)
+  },
+  filename: function (req, file, cb) {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9)
+    cb(null, uniqueSuffix + '-' + file.originalname)
+  }
+});
+const upload = multer({ storage: storage });
+
 app.use(cors());
 app.use(express.json());
+app.use('/uploads', express.static(uploadDir));
 
 // --- Authentication Middleware ---
 const authenticateToken = (req, res, next) => {
@@ -87,13 +108,34 @@ app.get('/api/auth/me', authenticateToken, (req, res) => {
 // 2. Internship Routes
 app.get('/api/internships', authenticateToken, (req, res) => {
   try {
-    const internships = db.prepare(`
+    let query = `
       SELECT i.*, u.name as adminName 
       FROM internships i 
       JOIN users u ON i.adminId = u.id 
-      ORDER BY i.id DESC
-    `).all();
+    `;
+    if (req.user.role === 'student') {
+      query += ` WHERE i.status = 'active' `;
+    }
+    query += ` ORDER BY i.id DESC`;
+    
+    const internships = db.prepare(query).all();
     res.json(internships);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.put('/api/internships/:id/status', authenticateToken, (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Access denied.' });
+  try {
+    const { status } = req.body;
+    const internshipId = req.params.id;
+    
+    const internship = db.prepare('SELECT * FROM internships WHERE id = ?').get(internshipId);
+    if (!internship || internship.adminId !== req.user.id) return res.status(403).json({ error: 'Not authorized' });
+
+    db.prepare('UPDATE internships SET status = ? WHERE id = ?').run(status, internshipId);
+    res.json({ message: 'Status updated' });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -112,16 +154,21 @@ app.post('/api/internships', authenticateToken, (req, res) => {
 });
 
 // 3. Application Routes
-app.post('/api/applications', authenticateToken, (req, res) => {
+app.post('/api/applications', authenticateToken, upload.single('resume'), (req, res) => {
   if (req.user.role !== 'student') return res.status(403).json({ error: 'Only students can apply.' });
   try {
     const { internshipId, coverLetter } = req.body;
+    let resumeUrl = null;
+    if (req.file) {
+      resumeUrl = '/uploads/' + req.file.filename;
+    }
+
     // Check if already applied
     const existing = db.prepare('SELECT * FROM applications WHERE studentId = ? AND internshipId = ?').get(req.user.id, internshipId);
     if (existing) return res.status(400).json({ error: 'Already applied to this internship.' });
 
-    const stmt = db.prepare('INSERT INTO applications (studentId, internshipId, coverLetter) VALUES (?, ?, ?)');
-    const info = stmt.run(req.user.id, internshipId, coverLetter);
+    const stmt = db.prepare('INSERT INTO applications (studentId, internshipId, coverLetter, resumeUrl) VALUES (?, ?, ?, ?)');
+    const info = stmt.run(req.user.id, internshipId, coverLetter, resumeUrl);
     res.status(201).json({ id: info.lastInsertRowid, status: 'pending' });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -208,7 +255,7 @@ app.get('/api/tasks', authenticateToken, (req, res) => {
   try {
     if (req.user.role === 'student') {
       const tasks = db.prepare(`
-        SELECT st.id as studentTaskId, st.status as completionStatus, st.report, st.completedAt, 
+        SELECT st.id as studentTaskId, st.status as completionStatus, st.report, st.fileUrl, st.completedAt, 
                t.id as taskId, t.title, t.description, t.deadline, i.title as internshipTitle
         FROM student_tasks st
         JOIN tasks t ON st.taskId = t.id
@@ -220,6 +267,7 @@ app.get('/api/tasks', authenticateToken, (req, res) => {
       // Admin sees tasks they've created and student completions
       const tasks = db.prepare(`
         SELECT st.id as studentTaskId, st.status as completionStatus, st.studentId, u.name as studentName,
+               st.report, st.fileUrl,
                t.id as taskId, t.title, t.description, t.deadline, i.title as internshipTitle
         FROM tasks t
         LEFT JOIN student_tasks st ON t.id = st.taskId
@@ -234,17 +282,22 @@ app.get('/api/tasks', authenticateToken, (req, res) => {
   }
 });
 
-app.put('/api/tasks/:studentTaskId/status', authenticateToken, (req, res) => {
+app.put('/api/tasks/:studentTaskId/status', authenticateToken, upload.single('taskFile'), (req, res) => {
   if (req.user.role !== 'student') return res.status(403).json({ error: 'Access denied.' });
   try {
     const { status, report } = req.body;
     const studentTaskId = req.params.studentTaskId;
     
+    let fileUrl = null;
+    if (req.file) {
+      fileUrl = '/uploads/' + req.file.filename;
+    }
+    
     // Verify ownership
     const st = db.prepare('SELECT studentId FROM student_tasks WHERE id = ?').get(studentTaskId);
     if (!st || st.studentId !== req.user.id) return res.status(403).json({ error: 'Not authorized' });
 
-    db.prepare('UPDATE student_tasks SET status = ?, report = ?, completedAt = CURRENT_TIMESTAMP WHERE id = ?').run(status, report || null, studentTaskId);
+    db.prepare('UPDATE student_tasks SET status = ?, report = ?, fileUrl = COALESCE(?, fileUrl), completedAt = CURRENT_TIMESTAMP WHERE id = ?').run(status, report || null, fileUrl, studentTaskId);
     res.json({ message: 'Task updated successfully' });
   } catch (error) {
     res.status(500).json({ error: error.message });

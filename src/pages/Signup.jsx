@@ -73,7 +73,7 @@ export default function Signup() {
           </div>
 
           <div>
-            <label className="text-xs text-zinc-600 dark:text-zinc-400">Name (optional)</label>
+            <label className="text-xs text-zinc-600 dark:text-zinc-400">Name</label>
             <input
               value={name}
               onChange={(e) => setName(e.target.value)}
@@ -100,12 +100,12 @@ export default function Signup() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               className="mt-2 w-full rounded-xl px-4 py-3 text-sm ring-1 ring-black/10 bg-white/70 dark:bg-zinc-950/40 dark:ring-white/10"
-              placeholder="Enter a string password"
+              placeholder="Enter password"
               type="password"
               required
             />
             <p className="mt-2 text-xs text-zinc-500">
-              Demo only (stored in localStorage).
+              Your password is encrypted securely.
             </p>
           </div>
 

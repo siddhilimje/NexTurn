@@ -21,6 +21,7 @@
     "framer-motion": "^12.34.3",
     "jsonwebtoken": "^9.0.3",
     "lucide-react": "^0.575.0",
+    "multer": "^2.1.1",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-router-dom": "^7.13.1"
